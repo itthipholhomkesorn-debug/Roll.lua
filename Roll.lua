@@ -1,259 +1,342 @@
 -- ============================================================
--- Roll A Gnome - Auto Teleport + Buy + UI
--- วาร์ปไปหาเปา้ หมาย + กดซอื้ + แสดง UI สถานะ
+-- Roll A Gnome - Auto Teleport + Buy + Draggable UI
+-- 8 เป้าหมาย: Hornet, Bunny, Frog, Cat, Dog, Turtle, Bee, Owl
 -- ============================================================
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local Player = Players.LocalPlayer
 local Character = Player.Character or Player.CharacterAdded:Wait()
 local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 local Humanoid = Character:WaitForChild("Humanoid")
 
--- ตัง้ ค่า
-local TARGET_NAMES = {"Hornet", "Bunny", "Frog"}
+-- ตั้ งค ่ า
+local TARGET_NAMES = {"Hornet", "Bunny", "Frog", "Cat", "Dog", "Turtle", "Bee", "Owl"}
+local TARGET_THAI = {Hornet="ฮอร์เนต", Bunny="กระต่าย", Frog="กบ", Cat="แมว", Dog="หมา", Turtle="เต่า", Bee="ผึ้ง", Owl="นกฮูก"}
+local TARGET_ENABLED = {}
+for _,n in ipairs(TARGET_NAMES) do TARGET_ENABLED[n] = true end
+
 local SCAN_RANGE = 1000
 local SCAN_INTERVAL = 2
-local TELEPORT_DISTANCE = 5  -- วาร์ปไปหางเปา้ หมายในระยะน้ี
-local BUY_BUTTON_NAMES = {"Buy", "buy", "Purchase", "purchase", "ซื้ อ", "BuyButton", "Button", "Claim"}
 
--- ตัวแปรสถิต ิ
-local stats = {
-    found = 0,
-    bought = 0,
-    hornet = 0,
-    bunny = 0,
-    frog = 0,
-    errors = 0
-}
+-- สถิต ิ
+local stats = {found=0, bought=0}
+for _,n in ipairs(TARGET_NAMES) do stats[string.lower(n)] = 0 end
+
+-- UI vars
+local uiRefs = {}
+local isDragging = false
+local dragOffset = Vector2.new(0,0)
+local running = true
+local skipCurrent = false
+local logHistory = {}
 
 -- ============================================================
--- สว่ น UI
+-- UI
 -- ============================================================
 local function createUI()
-    -- ลบ UI เก่าถ้ามี
-    local oldUI = Player:FindFirstChild("BluezyGPT_UI")
-    if oldUI then oldUI:Destroy() end
-    
+    local old = Player:FindFirstChild("BluezyGPT_UI")
+    if old then old:Destroy() end
+
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "BluezyGPT_UI"
     screenGui.ResetOnSpawn = false
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     screenGui.Parent = Player:FindFirstChild("PlayerGui") or Player
-    
-    -- Frame หลัก
-    local mainFrame = Instance.new("Frame")
-    mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 280, 0, 220)
-    mainFrame.Position = UDim2.new(0, 10, 0, 10)
-    mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
-    mainFrame.BorderSizePixel = 0
-    mainFrame.Parent = screenGui
-    
-    -- ขอบสเี ส้ น
+
+    local main = Instance.new("Frame")
+    main.Size = UDim2.new(0, 340, 0, 420)
+    main.Position = UDim2.new(0, 10, 0, 10)
+    main.BackgroundColor3 = Color3.fromRGB(12, 12, 28)
+    main.BorderSizePixel = 0
+    main.Parent = screenGui
+
     local border = Instance.new("Frame")
-    border.Name = "Border"
-    border.Size = UDim2.new(1, 0, 1, 0)
-    border.Position = UDim2.new(0, 0, 0, 0)
+    border.Size = UDim2.new(1,0,1,0)
     border.BackgroundColor3 = Color3.fromRGB(100, 50, 200)
-    border.BorderSizePixel = 0
     border.BackgroundTransparency = 0.7
-    border.Parent = mainFrame
-    
-    -- หัวข้อ
-    local title = Instance.new("TextLabel")
-    title.Name = "Title"
-    title.Size = UDim2.new(1, 0, 0, 35)
-    title.Position = UDim2.new(0, 0, 0, 0)
-    title.BackgroundColor3 = Color3.fromRGB(40, 20, 60)
-    title.BorderSizePixel = 0
-    title.Text = "🐝 BluezyGPT Auto-Find"
-    title.TextColor3 = Color3.fromRGB(255, 200, 100)
-    title.TextSize = 16
-    title.Font = Enum.Font.GothamBold
-    title.Parent = mainFrame
-    
-    -- ปุ่มปิด
+    border.BorderSizePixel = 0
+    border.Parent = main
+
+    -- Title bar
+    local titleBar = Instance.new("Frame")
+    titleBar.Size = UDim2.new(1,0,0,35)
+    titleBar.BackgroundColor3 = Color3.fromRGB(30, 15, 50)
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = main
+
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size = UDim2.new(1,-30,1,0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = "🐝 BluezyGPT Auto-Find v3"
+    titleLbl.TextColor3 = Color3.fromRGB(255, 200, 100)
+    titleLbl.TextSize = 14
+    titleLbl.Font = Enum.Font.GothamBold
+    titleLbl.Parent = titleBar
+
     local closeBtn = Instance.new("TextButton")
-    closeBtn.Name = "CloseBtn"
-    closeBtn.Size = UDim2.new(0, 30, 0, 30)
-    closeBtn.Position = UDim2.new(1, -30, 0, 2)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    closeBtn.Text = "X"
-    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.Size = UDim2.new(0,30,0,35)
+    closeBtn.Position = UDim2.new(1,-30,0,0)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(180,40,40)
+    closeBtn.Text = "✕"
+    closeBtn.TextColor3 = Color3.fromRGB(255,255,255)
     closeBtn.TextSize = 14
     closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.Parent = mainFrame
-    closeBtn.MouseButton1Click:Connect(function()
-        screenGui:Destroy()
+    closeBtn.Parent = titleBar
+    closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
+
+    -- Drag
+    titleBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            isDragging = true
+            dragOffset = inp.Position - Vector2.new(main.AbsolutePosition.X, main.AbsolutePosition.Y)
+        end
     end)
-    
-    -- ข้อความสถานะ
-    local statusLabel = Instance.new("TextLabel")
-    statusLabel.Name = "StatusLabel"
-    statusLabel.Size = UDim2.new(1, -10, 0, 25)
-    statusLabel.Position = UDim2.new(0, 5, 0, 40)
-    statusLabel.BackgroundTransparency = 1
-    statusLabel.Text = "สถานะ: กำลังสแกน..."
-    statusLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
-    statusLabel.TextSize = 13
-    statusLabel.Font = Enum.Font.Gotham
-    statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-    statusLabel.Parent = mainFrame
-    
-    local targetLabel = Instance.new("TextLabel")
-    targetLabel.Name = "TargetLabel"
-    targetLabel.Size = UDim2.new(1, -10, 0, 25)
-    targetLabel.Position = UDim2.new(0, 5, 0, 65)
-    targetLabel.BackgroundTransparency = 1
-    targetLabel.Text = "เป้าหมาย: -"
-    targetLabel.TextColor3 = Color3.fromRGB(255, 180, 50)
-    targetLabel.TextSize = 13
-    targetLabel.Font = Enum.Font.Gotham
-    targetLabel.TextXAlignment = Enum.TextXAlignment.Left
-    targetLabel.Parent = mainFrame
-    
-    local distLabel = Instance.new("TextLabel")
-    distLabel.Name = "DistLabel"
-    distLabel.Size = UDim2.new(1, -10, 0, 25)
-    distLabel.Position = UDim2.new(0, 5, 0, 90)
-    distLabel.BackgroundTransparency = 1
-    distLabel.Text = "ระยะทาง: -"
-    distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    distLabel.TextSize = 12
-    distLabel.Font = Enum.Font.Gotham
-    distLabel.TextXAlignment = Enum.TextXAlignment.Left
-    distLabel.Parent = mainFrame
-    
-    -- สถิติ
-    local statsFrame = Instance.new("Frame")
-    statsFrame.Name = "StatsFrame"
-    statsFrame.Size = UDim2.new(1, -10, 0, 90)
-    statsFrame.Position = UDim2.new(0, 5, 0, 120)
-    statsFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
-    statsFrame.BorderSizePixel = 0
-    statsFrame.Parent = mainFrame
-    
-    local statsText = Instance.new("TextLabel")
-    statsText.Name = "StatsText"
-    statsText.Size = UDim2.new(1, 0, 1, 0)
-    statsText.Position = UDim2.new(0, 5, 0, 0)
-    statsText.BackgroundTransparency = 1
-    statsText.Text = "พบ: 0 | ซื้อ: 0\nHornet: 0 | Bunny: 0 | Frog: 0"
-    statsText.TextColor3 = Color3.fromRGB(180, 180, 220)
-    statsText.TextSize = 11
-    statsText.Font = Enum.Font.Gotham
-    statsText.TextXAlignment = Enum.TextXAlignment.Left
-    statsText.TextYAlignment = Enum.TextYAlignment.Top
-    statsText.TextWrapped = true
-    statsText.Parent = statsFrame
-    
-    -- ปุ่มเริ่ม/หยุด
-    local toggleBtn = Instance.new("TextButton")
-    toggleBtn.Name = "ToggleBtn"
-    toggleBtn.Size = UDim2.new(1, -10, 0, 30)
-    toggleBtn.Position = UDim2.new(0, 5, 0, 185)
-    toggleBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 100)
-    toggleBtn.Text = "⏸ หยุดชั่วคราว"
-    toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    toggleBtn.TextSize = 13
-    toggleBtn.Font = Enum.Font.GothamBold
-    toggleBtn.Parent = mainFrame
-    
-    -- UI References
-    local uiRefs = {
-        status = statusLabel,
-        target = targetLabel,
-        dist = distLabel,
-        stats = statsText,
-        toggle = toggleBtn
+    titleBar.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then isDragging = false end
+    end)
+    game:GetService("UserInputService").InputChanged:Connect(function(inp)
+        if isDragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+            local p = inp.Position - dragOffset
+            main.Position = UDim2.new(0,p.X,0,p.Y)
+        end
+    end)
+
+    -- Status
+    local stLbl = Instance.new("TextLabel")
+    stLbl.Size = UDim2.new(1,-10,0,22)
+    stLbl.Position = UDim2.new(0,5,0,40)
+    stLbl.BackgroundTransparency = 1
+    stLbl.Text = "สถานะ: กำลังสแกน..."
+    stLbl.TextColor3 = Color3.fromRGB(100,220,255)
+    stLbl.TextSize = 12
+    stLbl.Font = Enum.Font.Gotham
+    stLbl.TextXAlignment = Enum.TextXAlignment.Left
+    stLbl.Parent = main
+
+    local tgLbl = Instance.new("TextLabel")
+    tgLbl.Size = UDim2.new(1,-10,0,22)
+    tgLbl.Position = UDim2.new(0,5,0,62)
+    tgLbl.BackgroundTransparency = 1
+    tgLbl.Text = "เป้าหมาย: -"
+    tgLbl.TextColor3 = Color3.fromRGB(255,180,50)
+    tgLbl.TextSize = 12
+    tgLbl.Font = Enum.Font.Gotham
+    tgLbl.TextXAlignment = Enum.TextXAlignment.Left
+    tgLbl.Parent = main
+
+    local dsLbl = Instance.new("TextLabel")
+    dsLbl.Size = UDim2.new(1,-10,0,22)
+    dsLbl.Position = UDim2.new(0,5,0,84)
+    dsLbl.BackgroundTransparency = 1
+    dsLbl.Text = "ระยะ: -"
+    dsLbl.TextColor3 = Color3.fromRGB(180,180,180)
+    dsLbl.TextSize = 11
+    dsLbl.Font = Enum.Font.Gotham
+    dsLbl.TextXAlignment = Enum.TextXAlignment.Left
+    dsLbl.Parent = main
+
+    -- Toggle buttons (8 ตัว เรียง 2 แถว)
+    local colors = {
+        Hornet=Color3.fromRGB(200,180,50), Bunny=Color3.fromRGB(220,120,120),
+        Frog=Color3.fromRGB(80,180,80), Cat=Color3.fromRGB(180,140,80),
+        Dog=Color3.fromRGB(160,100,60), Turtle=Color3.fromRGB(60,140,60),
+        Bee=Color3.fromRGB(220,200,50), Owl=Color3.fromRGB(120,80,160)
     }
-    
-    return screenGui, uiRefs
+    local btnSize = 78
+    local gap = 5
+    local startX = 5
+    local startY = 110
+
+    for i, name in ipairs(TARGET_NAMES) do
+        local col = (i-1) % 4
+        local row = math.floor((i-1) / 4)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, btnSize, 0, 28)
+        btn.Position = UDim2.new(0, startX + col*(btnSize+gap), 0, startY + row*33)
+        btn.BackgroundColor3 = colors[name]
+        btn.Text = TARGET_THAI[name] .. " (" .. name .. ")"
+        btn.TextColor3 = Color3.fromRGB(255,255,255)
+        btn.TextSize = 10
+        btn.Font = Enum.Font.GothamBold
+        btn.Parent = main
+        btn.MouseButton1Click:Connect(function()
+            TARGET_ENABLED[name] = not TARGET_ENABLED[name]
+            btn.BackgroundColor3 = TARGET_ENABLED[name] and colors[name] or Color3.fromRGB(80,80,80)
+            btn.TextStrokeTransparency = TARGET_ENABLED[name] and 1 or 0
+        end)
+    end
+
+    -- Stats
+    local sf = Instance.new("Frame")
+    sf.Size = UDim2.new(1,-10,0,80)
+    sf.Position = UDim2.new(0,5,0,180)
+    sf.BackgroundColor3 = Color3.fromRGB(20,20,40)
+    sf.BorderSizePixel = 0
+    sf.Parent = main
+
+    local stTxt = Instance.new("TextLabel")
+    stTxt.Name = "StatsText"
+    stTxt.Size = UDim2.new(1,0,1,0)
+    stTxt.Position = UDim2.new(0,5,0,0)
+    stTxt.BackgroundTransparency = 1
+    stTxt.Text = "พบ: 0 | ซื้อ: 0"
+    stTxt.TextColor3 = Color3.fromRGB(160,160,200)
+    stTxt.TextSize = 11
+    stTxt.Font = Enum.Font.Gotham
+    stTxt.TextXAlignment = Enum.TextXAlignment.Left
+    stTxt.TextYAlignment = Enum.TextYAlignment.Top
+    stTxt.TextWrapped = true
+    stTxt.Parent = sf
+
+    -- Buttons row
+    local btnY = 270
+    local skipBtn = Instance.new("TextButton")
+    skipBtn.Size = UDim2.new(0,75,0,28)
+    skipBtn.Position = UDim2.new(0,5,0,btnY)
+    skipBtn.BackgroundColor3 = Color3.fromRGB(200,150,30)
+    skipBtn.Text = "⏭ ข้าม"
+    skipBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    skipBtn.TextSize = 11
+    skipBtn.Font = Enum.Font.GothamBold
+    skipBtn.Parent = main
+
+    local runBtn = Instance.new("TextButton")
+    runBtn.Size = UDim2.new(0,90,0,28)
+    runBtn.Position = UDim2.new(0,90,0,btnY)
+    runBtn.BackgroundColor3 = Color3.fromRGB(50,180,80)
+    runBtn.Text = "⏸ หยุด"
+    runBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    runBtn.TextSize = 11
+    runBtn.Font = Enum.Font.GothamBold
+    runBtn.Parent = main
+
+    local refBtn = Instance.new("TextButton")
+    refBtn.Size = UDim2.new(0,75,0,28)
+    refBtn.Position = UDim2.new(0,190,0,btnY)
+    refBtn.BackgroundColor3 = Color3.fromRGB(60,100,200)
+    refBtn.Text = "🔄 รีเฟรช"
+    refBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    refBtn.TextSize = 10
+    refBtn.Font = Enum.Font.GothamBold
+    refBtn.Parent = main
+
+    local allBtn = Instance.new("TextButton")
+    allBtn.Size = UDim2.new(0,75,0,28)
+    allBtn.Position = UDim2.new(0,275,0,btnY)
+    allBtn.BackgroundColor3 = Color3.fromRGB(180,60,180)
+    allBtn.Text = "📋 ทั้งหมด"
+    allBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    allBtn.TextSize = 10
+    allBtn.Font = Enum.Font.GothamBold
+    allBtn.Parent = main
+
+    -- Log
+    local lf = Instance.new("Frame")
+    lf.Size = UDim2.new(1,-10,0,100)
+    lf.Position = UDim2.new(0,5,0,310)
+    lf.BackgroundColor3 = Color3.fromRGB(8,8,18)
+    lf.BorderSizePixel = 0
+    lf.Parent = main
+
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1,0,1,0)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 3
+    scroll.CanvasSize = UDim2.new(0,0,0,0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Parent = lf
+
+    local logLbl = Instance.new("TextLabel")
+    logLbl.Name = "LogLbl"
+    logLbl.Size = UDim2.new(1,-6,0,0)
+    logLbl.Position = UDim2.new(0,3,0,0)
+    logLbl.BackgroundTransparency = 1
+    logLbl.Text = "> พร้อมทำงาน..."
+    logLbl.TextColor3 = Color3.fromRGB(100,180,100)
+    logLbl.TextSize = 9
+    logLbl.Font = Enum.Font.Gotham
+    logLbl.TextXAlignment = Enum.TextXAlignment.Left
+    logLbl.TextYAlignment = Enum.TextYAlignment.Top
+    logLbl.TextWrapped = true
+    logLbl.Parent = scroll
+
+    uiRefs = {
+        status = stLbl, target = tgLbl, dist = dsLbl,
+        stats = stTxt, log = logLbl,
+        run = runBtn, skip = skipBtn, refresh = refBtn, all = allBtn
+    }
+
+    return screenGui
 end
 
 -- ============================================================
--- ฟังก์ชันทำงาน
+-- Functions
 -- ============================================================
-local running = true
-local uiRefs = nil
+local function addLog(msg)
+    local t = os.date("%H:%M:%S")
+    table.insert(logHistory, "["..t.."] "..msg)
+    if #logHistory > 60 then table.remove(logHistory,1) end
+    uiRefs.log.Text = table.concat(logHistory, "\n")
+end
 
 local function updateUI(status, target, dist)
-    if not uiRefs then return end
-    uiRefs.status.Text = "สถานะ: " .. status
-    uiRefs.target.Text = "เป้าหมาย: " .. (target or "-")
-    uiRefs.dist.Text = "ระยะทาง: " .. (dist and math.floor(dist) .. " studs" or "-")
-    uiRefs.stats.Text = string.format(
-        "พบ: %d | ซื้อ: %d\nHornet: %d | Bunny: %d | Frog: %d",
-        stats.found, stats.bought, stats.hornet, stats.bunny, stats.frog
-    )
+    if not uiRefs.status then return end
+    uiRefs.status.Text = "สถานะ: "..status
+    uiRefs.target.Text = "เป้าหมาย: "..(target or "-")
+    uiRefs.dist.Text = "ระยะ: "..(dist and math.floor(dist).." studs" or "-")
+
+    local s = string.format("พบ: %d | ซื้อ: %d\n", stats.found, stats.bought)
+    for _,n in ipairs(TARGET_NAMES) do
+        local v = stats[string.lower(n)] or 0
+        s = s..string.format("%s:%d ", TARGET_THAI[n], v)
+    end
+    uiRefs.stats.Text = s
 end
 
 local function findTarget()
-    local closest = nil
-    local closestDist = math.huge
-    local closestName = ""
-    
-    for _, obj in ipairs(Workspace:GetDescendants()) do
+    local closest, closestDist, closestName = nil, math.huge, ""
+    for _,obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Model") or obj:IsA("Part") then
-            local name = string.lower(obj.Name)
-            
-            for _, target in ipairs(TARGET_NAMES) do
-                if string.find(name, string.lower(target)) then
-                    local root = obj:FindFirstChild("HumanoidRootPart") 
-                                 or obj:FindFirstChild("RootPart") 
-                                 or obj.PrimaryPart
-                    
+            local nm = string.lower(obj.Name)
+            for _,tgt in ipairs(TARGET_NAMES) do
+                if TARGET_ENABLED[tgt] and string.find(nm, string.lower(tgt)) then
+                    local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("RootPart") or obj.PrimaryPart
                     if root then
-                        local pos = root.Position
-                        local dist = (pos - HumanoidRootPart.Position).Magnitude
-                        
-                        if dist < SCAN_RANGE and dist < closestDist then
-                            closestDist = dist
-                            closest = pos
-                            closestName = target
+                        local d = (root.Position - HumanoidRootPart.Position).Magnitude
+                        if d < SCAN_RANGE and d < closestDist then
+                            closestDist = d
+                            closest = root.Position
+                            closestName = tgt
                         end
                     end
                 end
             end
         end
     end
-    
     return closest, closestDist, closestName
 end
 
--- ฟังก์ชันวาร์ป
-local function teleportTo(position)
+local function teleport(pos)
     if not HumanoidRootPart then return false end
-    
-    -- วาร์ปไปห่างจากเป้าหมายนิดหน่อย (กันติด)
-    local teleportPos = position + Vector3.new(3, 0, 0)
-    HumanoidRootPart.CFrame = CFrame.new(teleportPos)
+    HumanoidRootPart.CFrame = CFrame.new(pos + Vector3.new(3,0,0))
     return true
 end
 
--- ฟังก์ชันกด Buy
-local function clickBuyButton()
-    local ui = Player:FindFirstChild("PlayerGui")
-    if not ui then return false end
-    
-    for _, descendant in ipairs(ui:GetDescendants()) do
-        if descendant:IsA("TextButton") or descendant:IsA("ImageButton") then
-            local text = descendant.Text or ""
-            local name = descendant.Name or ""
-            
-            for _, buyName in ipairs(BUY_BUTTON_NAMES) do
-                if string.find(string.lower(text), string.lower(buyName)) or 
-                   string.find(string.lower(name), string.lower(buyName)) then
-                    if descendant.Visible then
-                        pcall(function()
-                            descendant.Activated:Fire()
-                        end)
-                        pcall(function()
-                            descendant:FireServer()
-                        end)
-                        print(">>> กดปุ่ม: " .. name .. " (" .. text .. ")")
+local function clickBuy()
+    local gui = Player:FindFirstChild("PlayerGui")
+    if not gui then return false end
+    local keywords = {"Buy","buy","Purchase","purchase","ซื้อ","Claim","claim","Get","get"}
+    for _,desc in ipairs(gui:GetDescendants()) do
+        if desc:IsA("TextButton") or desc:IsA("ImageButton") then
+            local t = desc.Text or ""
+            local n = desc.Name or ""
+            for _,kw in ipairs(keywords) do
+                if string.find(string.lower(t), string.lower(kw)) or string.find(string.lower(n), string.lower(kw)) then
+                    if desc.Visible then
+                        pcall(function() desc.Activated:Fire() end)
+                        pcall(function() desc:FireServer() end)
+                        addLog("กดปุ่ม: "..n.." ("..t..")")
                         return true
                     end
                 end
@@ -263,58 +346,81 @@ local function clickBuyButton()
     return false
 end
 
--- ฟังก์ชันหลัก
-local function startScript()
-    local screenGui, refs = createUI()
-    uiRefs = refs
-    
-    -- ปุ่ม toggle
-    uiRefs.toggle.MouseButton1Click:Connect(function()
+-- ============================================================
+-- Button events
+-- ============================================================
+local function setupButtons()
+    uiRefs.run.MouseButton1Click:Connect(function()
         running = not running
-        uiRefs.toggle.Text = running and "⏸ หยุดชั่วคราว" or "▶ ดำเนินการต่อ"
-        uiRefs.toggle.BackgroundColor3 = running and Color3.fromRGB(50, 200, 100) or Color3.fromRGB(200, 150, 50)
+        uiRefs.run.Text = running and "⏸ หยุด" or "▶ ดำเนินการ"
+        uiRefs.run.BackgroundColor3 = running and Color3.fromRGB(50,180,80) or Color3.fromRGB(200,150,30)
+        addLog(running and "ดำเนินการต่อ..." or "หยุดชั่วคราว")
     end)
-    
+
+    uiRefs.skip.MouseButton1Click:Connect(function()
+        skipCurrent = true
+        addLog("ข้ามตัวปัจจุบัน")
+    end)
+
+    uiRefs.refresh.MouseButton1Click:Connect(function()
+        addLog("รีเฟรชสแกน...")
+    end)
+
+    uiRefs.all.MouseButton1Click:Connect(function()
+        addLog("สรุป: พบ "..stats.found.." | ซื้อ "..stats.bought)
+        for _,n in ipairs(TARGET_NAMES) do
+            addLog("  "..TARGET_THAI[n]..": "..(stats[string.lower(n)] or 0))
+        end
+    end)
+end
+
+-- ============================================================
+-- Main loop
+-- ============================================================
+local function startScript()
+    createUI()
+    setupButtons()
+    addLog("เริ่มทำงาน — 8 เป้าหมาย, UI ลากได้")
     updateUI("กำลังสแกน...", "-", nil)
-    
+
     while true do
         wait(SCAN_INTERVAL)
-        
+
         if not running then
             updateUI("หยุดชั่วคราว", "-", nil)
             continue
         end
-        
-        local targetPos, dist, name = findTarget()
-        
-        if targetPos then
+
+        if skipCurrent then
+            skipCurrent = false
+            addLog("ข้าม — สแกนใหม่")
+            wait(1)
+        end
+
+        local pos, dist, name = findTarget()
+
+        if pos then
             stats.found = stats.found + 1
-            if name == "Hornet" then stats.hornet = stats.hornet + 1 end
-            if name == "Bunny" then stats.bunny = stats.bunny + 1 end
-            if name == "Frog" then stats.frog = stats.frog + 1 end
-            
+            stats[string.lower(name)] = (stats[string.lower(name)] or 0) + 1
+
             updateUI("✓ พบ!", name, dist)
-            
-            -- วาร์ปไปหา
+            addLog("พบ "..TARGET_THAI[name].." ("..name..") ระยะ "..math.floor(dist).." studs")
+
             updateUI("วาร์ป...", name, dist)
-            teleportTo(targetPos)
-            wait(0.5)
-            
-            -- กด Buy
+            teleport(pos)
+            wait(0.8)
+
             updateUI("กำลังซื้อ...", name, 0)
-            local clicked = clickBuyButton()
-            
-            if clicked then
+            local ok = clickBuy()
+            if ok then
                 stats.bought = stats.bought + 1
                 updateUI("✓ ซื้อสำเร็จ!", name, 0)
-                print(">>> ซื้อ " .. name .. " สำเร็จ! (รวม " .. stats.bought .. " ตัว)")
+                addLog("ซื้อ "..TARGET_THAI[name].." สำเร็จ! รวม "..stats.bought.." ตัว")
             else
                 updateUI("⚠ ไม่พบปุ่ม Buy", name, 0)
-                print(">>> ไม่พบปุ่ม Buy สำหรับ " .. name)
-                stats.errors = stats.errors + 1
+                addLog("ไม่พบปุ่ม Buy สำหรับ "..TARGET_THAI[name])
             end
-            
-            updateUI("รอ...", name, 0)
+
             wait(3)
         else
             updateUI("กำลังสแกน...", "-", nil)
@@ -322,6 +428,5 @@ local function startScript()
     end
 end
 
--- เริ่มทำงาน
-print("=== BluezyGPT Auto-Find + Teleport + Buy เริ่มทำงาน ===")
+print("=== BluezyGPT Auto-Find v3 — 8 Targets ===")
 startScript()
